@@ -2,6 +2,10 @@
 #include <fstream>
 #include <string>
 #include <filesystem>
+#include <cstdlib>
+#include <sstream>
+#include <iomanip>
+
 
 class CPUInfo{
 public:
@@ -173,6 +177,83 @@ std::string BatteryInfo() {
     return "N/A";
 }
 
+std::string DiskInfo() {
+    auto human_size = [](unsigned long long bytes) {
+        const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+        int unit = 0;
+        double size = static_cast<double>(bytes);
+        while (size >= 1024.0 && unit < 4) {
+            size /= 1024.0;
+            ++unit;
+        }
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(size >= 10.0 ? 0 : 2) << size << " " << units[unit];
+        return ss.str();
+    };
+
+    std::string info;
+    const std::filesystem::path sys_block("/sys/block");
+    if (!std::filesystem::exists(sys_block)) return "N/A";
+
+    for (auto const& entry : std::filesystem::directory_iterator(sys_block)) {
+        std::string dev = entry.path().filename().string();
+
+        if (dev.rfind("loop", 0) == 0) continue;
+        if (dev.rfind("ram", 0) == 0) continue;
+        if (dev == "fd0") continue;
+
+        std::uint64_t sectors = 0;
+        std::filesystem::path sizePath = entry.path() / "size";
+        if (std::filesystem::exists(sizePath)) {
+            std::ifstream sf(sizePath);
+            std::string s;
+            if (std::getline(sf, s)) {
+                try {
+                    sectors = std::stoull(s);
+                } catch (...) { sectors = 0; }
+            }
+        }
+
+        unsigned long long bytes = sectors * 512ULL;
+
+        
+        std::string model;
+        std::filesystem::path modelPath = entry.path() / "device" / "model";
+        std::filesystem::path vendorPath = entry.path() / "device" / "vendor";
+        if (std::filesystem::exists(modelPath)) {
+            std::ifstream mf(modelPath);
+            std::getline(mf, model);
+        } else if (std::filesystem::exists(vendorPath)) {
+            std::ifstream vf(vendorPath);
+            std::getline(vf, model);
+        } else {
+            std::filesystem::path alt = entry.path() / "device";
+            if (std::filesystem::exists(alt)) {
+                for (auto const& sub : std::filesystem::directory_iterator(alt)) {
+                    std::filesystem::path p = sub.path() / "model";
+                    if (std::filesystem::exists(p)) {
+                        std::ifstream sf2(p);
+                        std::getline(sf2, model);
+                        break;
+                    }
+                }
+            }
+        }
+
+        std::ostringstream line;
+        line << dev << "\t" << (bytes ? human_size(bytes) : "Unknown size");
+        if (!model.empty()) line << "\t" << model;
+        info += line.str() + "\n";
+    }
+
+    return info.empty() ? "N/A" : info;
+}
+
+std::string ShellInfo() {
+    const char* shell = std::getenv("SHELL");
+    return shell ? shell : "N/A";
+}
+
 int main () {
     // Colors so the output doesn't look boring
     const std::string RESET  = "\033[0m";
@@ -211,6 +292,8 @@ int main () {
     if (BatteryInfo() != "N/A") {
         std::cout << PINK << "Battery:            " << BatteryInfo() << RESET << "\n";
     }
+    std::cout << PINK << "Shell:              " << ShellInfo() << RESET << "\n";
+    std::cout << PINK << "Disk Info:          " << DiskInfo() << RESET;
     std::cout << PINK << "Boot Mode:          " << BootMode() << RESET << "\n";
     return 0;
 }
